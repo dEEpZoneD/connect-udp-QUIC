@@ -1364,45 +1364,19 @@ static int parse_connect_udp_request(struct req *req) {
     int port;
 
     if (strstr(path, prefix) == NULL) {
-        fprintf(stderr, "Error: Invalid path prefix\n");
-        return -1; // Error
+        LSQ_WARN(stderr, "Error: Invalid path");
+        return -1; 
     }
 
     path += strlen(prefix);
 
     char *port_str = strchr(path, (int)delimiter);
+    if (!port_str) return -1;
     *port_str = '\0';
     port_str++;
-    /* if (!ip_end || (ip_end - path) >= INET_ADDRSTRLEN) { */
-    /*     fprintf(stderr, "Error: Invalid IP address in path\n"); */
-    /*     return -1; */
-    /* } */
-    /* int diff = ip_end - path; */
-    /* for (int i=0; i<diff; i++) { */
-    /*     printf("%c", path[i]); */
-    /* } */
-    /* printf("\n"); */
-    /* char ip[diff]; */
-    /* strncpy(ip, path, ip_end - path); */
-    /* // ip[ip_end - path] = '\0'; */ 
-
-    /* path = ip_end + 1; */
-    /* char *port_end = strchr(path, (int)PATH_DELIMITER); */
-    /* diff = port_end - path; */
-    /* char port_str[diff]; */
-    /* if (!port_end || (port_end - path) >= 1+sizeof(port_str)) { */
-    /*     fprintf(stderr, "Error: Invalid port in path\n"); */
-    /*     return -1; */
-    /* } */
-    /* diff = port_end - path; */
-    /* for (int i=0; i<diff; i++) { */
-    /*     printf("%c", path[i]); */
-    /* } */
-    /* printf("\n"); */
-    /* strncpy(port_str, path, port_end - path); */
     port = atoi(port_str);
     if (port <= 0 || port > 65535) {
-        fprintf(stderr, "Error: Invalid port number\n");
+        LSQ_WARN("connect-udp: Invalid port number in path");
         return -1;
     }
 
@@ -1410,7 +1384,7 @@ static int parse_connect_udp_request(struct req *req) {
     target_sa.sin_family = AF_INET;
     target_sa.sin_port = htons(port);
     if (inet_pton(AF_INET, path, &(target_sa.sin_addr)) != 1) {
-        perror("inet_pton");
+        LSQ_WARN("inet_pton:%s" strerror(errno));
         return -1;
     }
 
@@ -1433,20 +1407,19 @@ int process_connect_udp_request(const char *data_buf, size_t buf_len) {
     // Create a UDP socket
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
-        perror("socket creation failed");
+        LSQ_WARN("connect-udp: socket creation failed: %s", strerror(errno));
         return -1;
     }
     // Send the data to the target
     ssize_t sent_len = sendto(sockfd, data_buf, buf_len, 0, (const struct sockaddr *)&target_sa, sizeof(target_sa));
     if (sent_len < 0) {
-        perror("sendto failed");
+        LSQ_WARN("connect-udp: sendto failed: %s", strerror(errno));
         close(sockfd);
         return -1;
     }
 
-    fprintf(stderr, "Sent %zd bytes\n", sent_len);
+    LSQ_INFO("connect-udp: Sent %zd bytes to target host", sent_len);
 
-    // Close the socket
     close(sockfd);
     return 0;
 }
@@ -1503,7 +1476,10 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
                 st_h->interop_u.ihc.resp = (struct resp) { INDEX_HTML, sizeof(INDEX_HTML) - 1, 0, };
                 break;
             case IOH_CONNECT_UDP:
-                parse_connect_udp_request(st_h->req);
+                if (0 > parse_connect_udp_request(st_h->req)) {
+                    ERROR_RESP(400, "Bad Request");
+                    break;
+                }
                 fprintf(stderr, "Finished parsing\n");
                 process_connect_udp_request("test", strlen("test"));
                 fprintf(stderr, "processed connection request\n");
