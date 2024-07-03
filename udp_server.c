@@ -22,19 +22,21 @@ static void signal_handler(int signum) {
 }
 
 void reverse_string(char *words) {
-    int len = strlen(word);
-    int i=0, j=--len;
+    int j = strlen(words);
+    int i=0;
+    j--;
     char temp;
     while (i < j) {
-        temp = word[i];
-        word[i] = word[j];
-        word[j] = temp;
+        temp = words[i];
+        words[i] = words[j];
+        words[j] = temp;
+        i++;
+        j--;
     }
 }
 
 int main() { 
     char buffer[MAXLINE];
-    char *word = buffer;
     struct sockaddr_in servaddr, cliaddr;
     socklen_t len;
 
@@ -76,7 +78,7 @@ int main() {
             perror("recvfrom");
         }
         
-        reverse_string(word);
+        reverse_string(buffer);
 
         n = sendto(sockfd, buffer, strlen(buffer), 0, (struct sockaddr *) &cliaddr, len);
         if (n < 0) {
