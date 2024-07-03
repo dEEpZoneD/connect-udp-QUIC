@@ -1,4 +1,7 @@
+# IDE files
 build/
+*.vim
+.vscode/
 
 # Prerequisites
 *.d

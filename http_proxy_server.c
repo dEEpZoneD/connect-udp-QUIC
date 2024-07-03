@@ -1231,7 +1231,7 @@ static struct req_map req_maps[] =
     { .method = GET, .path = "^/file-([0-9][0-9]*)([KMG]?)\\?push=([^&]*)$", .handler = IOH_GEN_FILE, .status = "200", .flags = RM_REGEX, },
     { .method = GET, .path = "^/file-([0-9][0-9]*)([KMG]?)\\?push=([^&]*)&push=([^&]*)$", .handler = IOH_GEN_FILE, .status = "200", .flags = RM_REGEX, },
     { .method = GET, .path = "^/file-([0-9][0-9]*)([KMG]?)\\?push=([^&]*)&push=([^&]*)&push=([^&]*)$", .handler = IOH_GEN_FILE, .status = "200", .flags = RM_REGEX, },
-    { .method = CONNECT, .path = "^/udp/192.168.122.252/8888/$", .handler = IOH_CONNECT_UDP, .status = "200", .flags = RM_REGEX|RM_WANTBODY, },
+    { .method = CONNECT, .path = "^/udp/", .handler = IOH_CONNECT_UDP, .status = "200", .flags = RM_REGEX|RM_WANTBODY, },
 };
 
 
@@ -1335,9 +1335,19 @@ static size_t
 read_connect_udp (void *ctx, const unsigned char *buf, size_t sz, int fin)
 {
     struct lsquic_stream_ctx *st_h = ctx;
-
-    if (sz)
-        strcpy(st_h->payload, buf);
+    if (sz) {
+        char *off = NULL;
+        if (off == NULL) {
+            off = malloc(sz+1);
+            st_h->payload = off;
+        }
+        else {
+            off = realloc(off, off - (st_h->payload) + sz + 1);
+            if (!off) return 0;
+        }
+        strcpy(off, buf);
+        off += sz;
+    }
 
     if (fin)
         st_h->interop_u.cuc.done = 1;
@@ -1348,46 +1358,48 @@ read_connect_udp (void *ctx, const unsigned char *buf, size_t sz, int fin)
 struct sockaddr_in target_sa;
 
 static int parse_connect_udp_request(struct req *req) {
-#define PATH_PREFIX "/udp/"
-#define PATH_DELIMITER '/'
-    char *path = req->path;
+    char *prefix = "/udp/";
+    char delimiter = '/';
+    char *path = strdup(req->path);
     int port;
 
-    if (strncmp(path, PATH_PREFIX, strlen(PATH_PREFIX)) != 0) {
+    if (strstr(path, prefix) == NULL) {
         fprintf(stderr, "Error: Invalid path prefix\n");
         return -1; // Error
     }
 
-    path += strlen(PATH_PREFIX);
+    path += strlen(prefix);
 
-    char *ip_end = strchr(path, (int)PATH_DELIMITER);
-    if (!ip_end || (ip_end - path) >= INET_ADDRSTRLEN) {
-        fprintf(stderr, "Error: Invalid IP address in path\n");
-        return -1;
-    }
-    int diff = ip_end - path;
-    for (int i=0; i<diff; i++) {
-        printf("%c", path[i]);
-    }
-    printf("\n");
-    char ip[diff];
-    strncpy(ip, path, ip_end - path);
-    // ip[ip_end - path] = '\0'; 
+    char *port_str = strchr(path, (int)delimiter);
+    *port_str = '\0';
+    port_str++;
+    /* if (!ip_end || (ip_end - path) >= INET_ADDRSTRLEN) { */
+    /*     fprintf(stderr, "Error: Invalid IP address in path\n"); */
+    /*     return -1; */
+    /* } */
+    /* int diff = ip_end - path; */
+    /* for (int i=0; i<diff; i++) { */
+    /*     printf("%c", path[i]); */
+    /* } */
+    /* printf("\n"); */
+    /* char ip[diff]; */
+    /* strncpy(ip, path, ip_end - path); */
+    /* // ip[ip_end - path] = '\0'; */ 
 
-    path = ip_end + 1;
-    char *port_end = strchr(path, (int)PATH_DELIMITER);
-    diff = port_end - path;
-    char port_str[diff];
-    if (!port_end || (port_end - path) >= 1+sizeof(port_str)) {
-        fprintf(stderr, "Error: Invalid port in path\n");
-        return -1;
-    }
-    diff = port_end - path;
-    for (int i=0; i<diff; i++) {
-        printf("%c", path[i]);
-    }
-    printf("\n");
-    strncpy(port_str, path, port_end - path);
+    /* path = ip_end + 1; */
+    /* char *port_end = strchr(path, (int)PATH_DELIMITER); */
+    /* diff = port_end - path; */
+    /* char port_str[diff]; */
+    /* if (!port_end || (port_end - path) >= 1+sizeof(port_str)) { */
+    /*     fprintf(stderr, "Error: Invalid port in path\n"); */
+    /*     return -1; */
+    /* } */
+    /* diff = port_end - path; */
+    /* for (int i=0; i<diff; i++) { */
+    /*     printf("%c", path[i]); */
+    /* } */
+    /* printf("\n"); */
+    /* strncpy(port_str, path, port_end - path); */
     port = atoi(port_str);
     if (port <= 0 || port > 65535) {
         fprintf(stderr, "Error: Invalid port number\n");
@@ -1397,7 +1409,7 @@ static int parse_connect_udp_request(struct req *req) {
     memset(&target_sa, 0, sizeof(target_sa));
     target_sa.sin_family = AF_INET;
     target_sa.sin_port = htons(port);
-    if (inet_pton(AF_INET, ip, &(target_sa.sin_addr)) != 1) {
+    if (inet_pton(AF_INET, path, &(target_sa.sin_addr)) != 1) {
         perror("inet_pton");
         return -1;
     }
@@ -1432,7 +1444,7 @@ int process_connect_udp_request(const char *data_buf, size_t buf_len) {
         return -1;
     }
 
-    fprintf(stderr, "Sent %zd bytes", sent_len);
+    fprintf(stderr, "Sent %zd bytes\n", sent_len);
 
     // Close the socket
     close(sockfd);
@@ -1492,8 +1504,10 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
                 break;
             case IOH_CONNECT_UDP:
                 parse_connect_udp_request(st_h->req);
+                fprintf(stderr, "Finished parsing\n");
                 process_connect_udp_request("test", strlen("test"));
-                st_h->interop_u.cuc.resp = (struct resp) { "done\n", sizeof("done\n"), 0, };
+                fprintf(stderr, "processed connection request\n");
+                /* st_h->interop_u.cuc.resp = (struct resp) { "done\n", sizeof("done\n"), 0, }; */
                 st_h->interop_u.cuc.done = 0;
                 break;
             case IOH_VER_HEAD:
@@ -1563,6 +1577,7 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
         switch (st_h->interop_handler)
         {
         case IOH_CONNECT_UDP:
+            fprintf(stderr, "Handler called\n");
             assert(!st_h->interop_u.cuc.done);
             nw = lsquic_stream_readf(stream, read_connect_udp, st_h);
             if (nw < 0)
@@ -1573,9 +1588,14 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
             if (nw == 0)
                 st_h->interop_u.cuc.done = 1;
             if (st_h->interop_u.cuc.done == 1) {
-                fprintf(stderr, "handler\n");
+                if (!(st_h->payload)) goto end;
                 process_connect_udp_request(st_h->payload, strlen((st_h->payload)));
+                fprintf(stderr, "sent UDP payload\n");
                 st_h->interop_u.cuc.resp = (struct resp) { "done\n", sizeof("done\n"), 0, };
+            end:
+                lsquic_stream_shutdown(stream, 0);
+                lsquic_stream_wantwrite(stream, 1);
+
             }
             break;
         case IOH_MD5SUM:
