@@ -396,6 +396,10 @@ struct index_html_ctx
 struct connect_udp_ctx
 {
     struct resp resp;
+    int sockfd;
+    struct sockaddr_in target_sa;
+    struct event_base *eb;
+    struct event *ev;
     int done;
 };
 
@@ -1216,6 +1220,25 @@ struct req_map
     regex_t                 re;
 };
 
+void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
+    /* TODO
+     * add logic to send response from target back to client*/
+    /* struct lsquic_stream_ctx *st_h = (struct lsquic_stream_ctx*) arg; */
+    /* ssize_t bytes_received = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&addr, &addr_len); */
+    /*     if (bytes_received < 0) { */
+    /*         perror("Error receiving packet"); */
+    /*         continue; // Try again on error */
+    /*     } */
+
+    /*     // Parse headers */
+    /*     ip_header = (struct ip *)buffer; */
+    /*     icmp_header = (struct icmp *)(buffer + (ip_header->ip_hl << 2)); // Skip IP header */
+
+    /*     // Check if it's a "Destination Unreachable" message */
+    /*     if (icmp_header->icmp_type == ICMP_DEST_UNREACH && icmp_header->icmp_code == ICMP_HOST_UNREACH) { */
+    /*         printf("ICMP Destination Unreachable (Host Unreachable) from %s\n", inet_ntoa(addr.sin_addr)); */
+    fprintf(stderr, "connect_callback called\n");
+}
 
 static struct req_map req_maps[] =
 {
@@ -1355,16 +1378,15 @@ read_connect_udp (void *ctx, const unsigned char *buf, size_t sz, int fin)
     return sz;
 }
 
-struct sockaddr_in target_sa;
-
-static int parse_connect_udp_request(struct req *req) {
+static int parse_connect_udp_request(lsquic_stream_ctx_t *st_h) {
+    struct connect_udp_ctx *connectudp = &(st_h->interop_u.cuc);
     char *prefix = "/udp/";
     char delimiter = '/';
-    char *path = strdup(req->path);
+    char *path = strdup(st_h->req->path);
     int port;
 
     if (strstr(path, prefix) == NULL) {
-        LSQ_WARN(stderr, "Error: Invalid path");
+        LSQ_WARN("connect-udp: error: Invalid path");
         return -1; 
     }
 
@@ -1380,47 +1402,61 @@ static int parse_connect_udp_request(struct req *req) {
         return -1;
     }
 
-    memset(&target_sa, 0, sizeof(target_sa));
-    target_sa.sin_family = AF_INET;
-    target_sa.sin_port = htons(port);
-    if (inet_pton(AF_INET, path, &(target_sa.sin_addr)) != 1) {
-        LSQ_WARN("inet_pton:%s" strerror(errno));
+    connectudp->target_sa.sin_family = AF_INET;
+    connectudp->target_sa.sin_port = htons(port);
+    if (inet_pton(AF_INET, path, &(connectudp->target_sa.sin_addr)) != 1) {
+        LSQ_WARN("connect-udp: inet_pton failed:%s", strerror(errno));
         return -1;
     }
 
-    char ip_str[INET_ADDRSTRLEN]; // Buffer to store IP as string
-    uint16_t portf = ntohs(target_sa.sin_port); // Convert port to host byte order
+    connectudp->sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (connectudp->sockfd < 0) {
+        LSQ_WARN("connect-udp: socket creation failed: %s", strerror(errno));
+        return 1;
+    }
 
-    inet_ntop(AF_INET, &(target_sa.sin_addr), ip_str, INET_ADDRSTRLEN); // Convert IP to string
+    int flags = fcntl(connectudp->sockfd, F_GETFL, 0);
+    if (flags < 0) {
+        LSQ_WARN("connect-udp: error getting socket flags: %s", strerror(errno));
+        return 1;
+    }
 
-    printf("sockaddr_in Information:\n");
-    printf("  Family: AF_INET (IPv4)\n");
-    printf("  Port: %hu\n", portf);
-    printf("  Address: %s\n", ip_str);
+    // Set non-blocking flag
+    flags |= O_NONBLOCK;
+    if (fcntl(connectudp->sockfd, F_SETFL, flags) < 0) {
+        LSQ_WARN("connect-udp: error setting non-blocking: %s", strerror(errno));
+        return 1;
+    }
+
+    connectudp->eb = event_base_new();
+    connectudp->ev = event_new(connectudp->eb, connectudp->sockfd, EV_READ|EV_PERSIST, connect_callback, st_h);
+    if (connectudp->ev) event_add(connectudp->ev, NULL);
+
+   /* char ip_str[INET_ADDRSTRLEN]; // Buffer to store IP as string */
+    /* uint16_t portf = ntohs(target_sa.sin_port); // Convert port to host byte order */
+
+    /* inet_ntop(AF_INET, &(target_sa.sin_addr), ip_str, INET_ADDRSTRLEN); // Convert IP to string */
+
+    /* printf("sockaddr_in Information:\n"); */
+    /* printf("  Family: AF_INET (IPv4)\n"); */
+    /* printf("  Port: %hu\n", portf); */
+    /* printf("  Address: %s\n", ip_str); */
 
     return 0;
 }
 
-int process_connect_udp_request(const char *data_buf, size_t buf_len) {
-    int sockfd;
+int process_connect_udp_request(lsquic_stream_ctx_t *st_h) {
 
-    // Create a UDP socket
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        LSQ_WARN("connect-udp: socket creation failed: %s", strerror(errno));
-        return -1;
-    }
     // Send the data to the target
-    ssize_t sent_len = sendto(sockfd, data_buf, buf_len, 0, (const struct sockaddr *)&target_sa, sizeof(target_sa));
+    ssize_t sent_len = sendto(st_h->interop_u.cuc.sockfd, st_h->payload, strlen(st_h->payload), 0, 
+            (const struct sockaddr *)&(st_h->interop_u.cuc.target_sa), sizeof(st_h->interop_u.cuc.target_sa));
     if (sent_len < 0) {
         LSQ_WARN("connect-udp: sendto failed: %s", strerror(errno));
-        close(sockfd);
         return -1;
     }
 
     LSQ_INFO("connect-udp: Sent %zd bytes to target host", sent_len);
-
-    close(sockfd);
+    /* event_base_dispatch(st_h->interop_u.cuc.eb); */
     return 0;
 }
 
@@ -1476,13 +1512,20 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
                 st_h->interop_u.ihc.resp = (struct resp) { INDEX_HTML, sizeof(INDEX_HTML) - 1, 0, };
                 break;
             case IOH_CONNECT_UDP:
-                if (0 > parse_connect_udp_request(st_h->req)) {
-                    ERROR_RESP(400, "Bad Request");
+                int rv = parse_connect_udp_request(st_h);
+                if (rv != 0) {
+                    switch(rv) {
+                        case -1:
+                            ERROR_RESP(400, "Bad Request");
+                            break;
+                        default:
+                            ERROR_RESP(500, "Internal error: cannot create socket");
+                            break;
+                    }
                     break;
                 }
                 fprintf(stderr, "Finished parsing\n");
-                process_connect_udp_request("test", strlen("test"));
-                fprintf(stderr, "processed connection request\n");
+                /* process_connect_udp_request(st_h); */
                 /* st_h->interop_u.cuc.resp = (struct resp) { "done\n", sizeof("done\n"), 0, }; */
                 st_h->interop_u.cuc.done = 0;
                 break;
@@ -1563,9 +1606,10 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
             }
             if (nw == 0)
                 st_h->interop_u.cuc.done = 1;
+                
             if (st_h->interop_u.cuc.done == 1) {
                 if (!(st_h->payload)) goto end;
-                process_connect_udp_request(st_h->payload, strlen((st_h->payload)));
+                process_connect_udp_request(st_h);
                 fprintf(stderr, "sent UDP payload\n");
                 st_h->interop_u.cuc.resp = (struct resp) { "done\n", sizeof("done\n"), 0, };
             end:
@@ -1887,6 +1931,30 @@ http_server_interop_on_write (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h
         lsquic_stream_shutdown(stream, 1);
 }
 
+static void
+http_server_interop_on_close (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
+{
+    if (st_h->interop_handler == IOH_CONNECT_UDP) {
+        event_base_loopbreak(st_h->interop_u.cuc.eb);
+        event_del(st_h->interop_u.cuc.ev);
+        event_free(st_h->interop_u.cuc.ev);
+        event_base_free(st_h->interop_u.cuc.eb);
+        close(st_h->interop_u.cuc.sockfd);
+    }
+    free(st_h->req_filename);
+    free(st_h->req_path);
+    if (st_h->reader.lsqr_ctx)
+        destroy_lsquic_reader_ctx(st_h->reader.lsqr_ctx);
+#if HAVE_PREADV
+    if (s_pwritev)
+        close(st_h->file_fd);
+#endif
+    if (st_h->req)
+        interop_server_hset_destroy(st_h->req);
+    free(st_h);
+    LSQ_INFO("%s called, has unacked data: %d", __func__,
+                                lsquic_stream_has_unacked_data(stream));
+}
 
 const struct lsquic_stream_if interop_http_server_if = {
     .on_new_conn            = http_server_on_new_conn,
@@ -1894,7 +1962,7 @@ const struct lsquic_stream_if interop_http_server_if = {
     .on_new_stream          = http_server_on_new_stream,
     .on_read                = http_server_interop_on_read,
     .on_write               = http_server_interop_on_write,
-    .on_close               = http_server_on_close,
+    .on_close               = http_server_interop_on_close,
 };
 #endif /* HAVE_REGEX */
 
