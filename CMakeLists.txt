@@ -23,6 +23,7 @@ INCLUDE_DIRECTORIES(lsquic/src/liblsquic)       # For lsquic_xxhash.h
 ADD_SUBDIRECTORY(lsquic/src/liblsquic)
 
 # ADD_EXECUTABLE(udp_server udp_server.c)
+add_executable(udp_server udp_server.c)
 add_executable(http_proxy_server http_proxy_server.c prog.c test_common.c test_cert.c)
 add_executable(http_proxy_client http_proxy_client.c prog.c test_common.c test_cert.c)
 SET(LIBS lsquic crypto ssl z event)

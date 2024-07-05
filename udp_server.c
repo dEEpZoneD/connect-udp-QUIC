@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 
 #define PORT 8888
 #define MAXLINE 1024
@@ -63,7 +64,18 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("UDP Server is listening on port %d...\n", PORT);
+    char ip_str[INET_ADDRSTRLEN]; // Buffer to store IP as string
+    uint16_t portf = ntohs(servaddr.sin_port); // Convert port to host byte order
+
+    inet_ntop(AF_INET, &(servaddr.sin_addr), ip_str, INET_ADDRSTRLEN); // Convert IP to string
+
+    printf("sockaddr_in Information:\n");
+    printf("  Family: AF_INET (IPv4)\n");
+    printf("  Port: %hu\n", portf);
+    printf("  Address: %s\n", ip_str);
+
+
+    printf("UDP Server is listening on port %s:%d...\n", ip_str, portf);
 
     while (1) {
         // Receive a UDP packet

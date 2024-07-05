@@ -16,7 +16,11 @@
 #include <inttypes.h>
 
 #ifndef WIN32
+#include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/ip_icmp.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
 #else
@@ -401,6 +405,7 @@ struct connect_udp_ctx
     struct event_base *eb;
     struct event *ev;
     int done;
+    unsigned char *buf;
 };
 
 
@@ -1223,21 +1228,36 @@ struct req_map
 void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
     /* TODO
      * add logic to send response from target back to client*/
-    /* struct lsquic_stream_ctx *st_h = (struct lsquic_stream_ctx*) arg; */
-    /* ssize_t bytes_received = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&addr, &addr_len); */
-    /*     if (bytes_received < 0) { */
-    /*         perror("Error receiving packet"); */
-    /*         continue; // Try again on error */
-    /*     } */
+    fprintf(stderr, "callbaxk called");;
+    struct lsquic_stream_ctx *st_h = (struct lsquic_stream_ctx*) arg;
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(struct sockaddr_in);
+    struct ip *ip_header;
+    struct icmp *icmp_header;
+    st_h->interop_u.cuc.buf = malloc(1024);
+    st_h->interop_u.cuc.buf[1023] = '\0';
 
-    /*     // Parse headers */
-    /*     ip_header = (struct ip *)buffer; */
-    /*     icmp_header = (struct icmp *)(buffer + (ip_header->ip_hl << 2)); // Skip IP header */
-
-    /*     // Check if it's a "Destination Unreachable" message */
-    /*     if (icmp_header->icmp_type == ICMP_DEST_UNREACH && icmp_header->icmp_code == ICMP_HOST_UNREACH) { */
-    /*         printf("ICMP Destination Unreachable (Host Unreachable) from %s\n", inet_ntoa(addr.sin_addr)); */
-    fprintf(stderr, "connect_callback called\n");
+    ssize_t bytes_received = recvfrom(sockfd, st_h->interop_u.cuc.buf, 1024, 0, (struct sockaddr *)&addr, &addr_len);
+    if (bytes_received < 0) {
+        LSQ_WARN("connect-udp: error receiving packet: %s", strerror(errno));
+        return;
+    }
+    st_h->interop_u.cuc.buf[bytes_received] = '\0';
+    fprintf(stderr, "Received from target:\n%s", st_h->interop_u.cuc.buf);
+    // Parse headers
+    ip_header = (struct ip *)st_h->interop_u.cuc.buf;
+    icmp_header = (struct icmp *)(st_h->interop_u.cuc.buf + (ip_header->ip_hl << 2)); // Skip IP header
+    // Check if it's a "Destination Unreachable" message
+    if (icmp_header->icmp_type == ICMP_DEST_UNREACH && icmp_header->icmp_code == ICMP_HOST_UNREACH)
+        LSQ_WARN("ICMP Destination Unreachable (Host Unreachable) from %s", inet_ntoa(addr.sin_addr));
+    
+    st_h->interop_u.cuc.resp = (struct resp) { st_h->interop_u.cuc.buf , strlen(st_h->interop_u.cuc.buf) - 1, 0, };
+    /* lsquic_stream_wantwrite(st_h->stream, 1); */
+    /* prog_process_conns(st_h->server_ctx->prog); */
+    free(st_h->interop_u.cuc.buf);
+    /* struct timeval tv = {5, 0}; // 5 seconds timeout */
+    /* event_base_loopexit(st_h->interop_u.cuc.eb, &tv); */
+    return;
 }
 
 static struct req_map req_maps[] =
@@ -1429,8 +1449,10 @@ static int parse_connect_udp_request(lsquic_stream_ctx_t *st_h) {
     }
 
     connectudp->eb = event_base_new();
-    connectudp->ev = event_new(connectudp->eb, connectudp->sockfd, EV_READ|EV_PERSIST, connect_callback, st_h);
+    connectudp->ev = event_new(st_h->interop_u.cuc.eb, connectudp->sockfd, 
+            EV_READ|EV_PERSIST, connect_callback, st_h);
     if (connectudp->ev) event_add(connectudp->ev, NULL);
+    else LSQ_WARN("Couldnot create an event for connect-udp");
 
    /* char ip_str[INET_ADDRSTRLEN]; // Buffer to store IP as string */
     /* uint16_t portf = ntohs(target_sa.sin_port); // Convert port to host byte order */
@@ -1456,7 +1478,8 @@ int process_connect_udp_request(lsquic_stream_ctx_t *st_h) {
     }
 
     LSQ_INFO("connect-udp: Sent %zd bytes to target host", sent_len);
-    /* event_base_dispatch(st_h->interop_u.cuc.eb); */
+    /* event_base_loop(st_h->server_ctx->prog->prog_eb, 0); */
+    event_base_loop(st_h->interop_u.cuc.eb, EVLOOP_NONBLOCK);
     return 0;
 }
 
@@ -1525,8 +1548,6 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
                     break;
                 }
                 fprintf(stderr, "Finished parsing\n");
-                /* process_connect_udp_request(st_h); */
-                /* st_h->interop_u.cuc.resp = (struct resp) { "done\n", sizeof("done\n"), 0, }; */
                 st_h->interop_u.cuc.done = 0;
                 break;
             case IOH_VER_HEAD:
@@ -1611,7 +1632,7 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
                 if (!(st_h->payload)) goto end;
                 process_connect_udp_request(st_h);
                 fprintf(stderr, "sent UDP payload\n");
-                st_h->interop_u.cuc.resp = (struct resp) { "done\n", sizeof("done\n"), 0, };
+                /* st_h->interop_u.cuc.resp = (struct resp) { "done\n", sizeof("done\n"), 0, }; */
             end:
                 lsquic_stream_shutdown(stream, 0);
                 lsquic_stream_wantwrite(stream, 1);
@@ -1935,9 +1956,12 @@ static void
 http_server_interop_on_close (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
 {
     if (st_h->interop_handler == IOH_CONNECT_UDP) {
+        fprintf(stderr, "\n\ninterop_on_clode called");
         event_base_loopbreak(st_h->interop_u.cuc.eb);
-        event_del(st_h->interop_u.cuc.ev);
-        event_free(st_h->interop_u.cuc.ev);
+        if (st_h->interop_u.cuc.ev) {
+            event_del(st_h->interop_u.cuc.ev);
+            event_free(st_h->interop_u.cuc.ev);
+        }
         event_base_free(st_h->interop_u.cuc.eb);
         close(st_h->interop_u.cuc.sockfd);
     }
