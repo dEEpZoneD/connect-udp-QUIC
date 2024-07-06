@@ -55,7 +55,8 @@ int main() {
 
     // Server information
     servaddr.sin_family = AF_INET; // IPv4
-    servaddr.sin_addr.s_addr = INADDR_ANY; // Accept packets on any interface
+    serveraddr.sin_addr.s_addr = inet_addr(192.168.1.14);
+    /* servaddr.sin_addr.s_addr = INADDR_ANY; // Accept packets on any interface */
     servaddr.sin_port = htons(PORT); // Server port
 
     // Bind the socket to the server address

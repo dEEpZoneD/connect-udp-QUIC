@@ -1235,7 +1235,8 @@ void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
     socklen_t addr_len = sizeof(struct sockaddr_in);
     struct ip *ip_header;
     struct icmp *icmp_header;
-    char *buffer = st_h->interop_u.cuc.buf;
+    char *buffer = malloc(1024); 
+        /* st_h->interop_u.cuc.buf; */
     struct iovec iov[1] = {{ buffer, st_h->interop_u.cuc.sz }};
     unsigned char ctl_buf[1024];
 
@@ -1248,14 +1249,14 @@ void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
         .msg_controllen = 1024,
     };
 
-    ssize_t bytes_received = recvmsg(sockfd, &msg, 0);
+    ssize_t bytes_received = recvfrom(sockfd, buffer, 1924, 0, (struct sockaddr *)&addr, &addr_len);
     if (bytes_received < 0) {
         LSQ_WARN("connect-udp: error receiving packet: %s", strerror(errno));
         return;
     }
     LSQ_WARN("Received %zd bytes from clint", bytes_received);
     buffer[bytes_received] = '\0';
-    st_h->interop_u.cuc.sz = bytes_received;
+    /* st_h->interop_u.cuc.sz = bytes_received; */
     fprintf(stderr, "Received from target:\n%s\n", buffer);
     
     /* struct sock_extended_err *eerr; */
@@ -1278,7 +1279,7 @@ void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
     
     st_h->interop_u.cuc.resp = (struct resp) { buffer , strlen(buffer), 0, };
     /* lsquic_stream_wantwrite(st_h->stream, 1); */
-    /* free(st_h->interop_u.cuc.buf); */
+    free(buffer);
     return;
 }
 
