@@ -1242,7 +1242,7 @@ void connect_timer_callback(evutil_socket_t sockfd, short event, void *arg) {
 void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
     /* TODO
      * add logic to send response from target back to client
-     * keep the tunnel open*/
+     * keep the tunnel open, until requested by client*/
 
     fprintf(stderr, "callbaxk called");;
     struct lsquic_stream_ctx *st_h = (struct lsquic_stream_ctx*) arg;
@@ -1275,7 +1275,7 @@ void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
     buffer[bytes_received] = '\0';
     /* st_h->interop_u.cuc.sz = bytes_received; */
     fprintf(stderr, "Received from target:\n%s\n", buffer);
-    
+
     struct sock_extended_err *eerr;
     struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
     /* eerr = (struct sock_extended_err *)CMSG_DATA(cmsg); */
