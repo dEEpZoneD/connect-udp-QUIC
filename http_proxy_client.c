@@ -865,6 +865,7 @@ http_client_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
             update_sample_stats(&s_stat_req, lsquic_time_now() - st_h->sh_ttfb);
             client_ctx->hcc_flags |= HCC_SEEN_FIN;
             lsquic_stream_shutdown(stream, 0);
+            lsquic_stream_wantwrite(stream, 1);
             break;
         }
         else if (client_ctx->prog->prog_settings.es_rw_once && EWOULDBLOCK == errno)

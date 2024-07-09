@@ -399,11 +399,17 @@ struct index_html_ctx
 
 struct connect_udp_ctx
 {
+    enum {
+        RECEIVED_HOSTUNREACH = 1<<0,
+        RECEIVED_CONNREFUSED = 1<<1,
+        CONNTIMEDOUT = 1<<2,
+    } flags;
     struct resp resp;
     int sockfd;
     struct sockaddr_in target_sa;
     struct event_base *eb;
     struct event *ev;
+    struct event *timer;
     int done;
     unsigned char *buf;
     ssize_t sz;
@@ -1226,30 +1232,41 @@ struct req_map
     regex_t                 re;
 };
 
+void connect_timer_callback(evutil_socket_t sockfd, short event, void *arg) {
+    lsquic_stream_ctx_t *st_h = (lsquic_stream_ctx_t *) arg;
+    st_h->interop_u.cuc.flags |= CONNTIMEDOUT;
+    LSQ_WARN("connect-udp: Connection timedout");
+    return;
+}
+
 void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
     /* TODO
-     * add logic to send response from target back to client*/
+     * add logic to send response from target back to client
+     * keep the tunnel open*/
+
     fprintf(stderr, "callbaxk called");;
     struct lsquic_stream_ctx *st_h = (struct lsquic_stream_ctx*) arg;
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(struct sockaddr_in);
     struct ip *ip_header;
     struct icmp *icmp_header;
-    char *buffer = malloc(1024); 
+    char *buffer = st_h->interop_u.cuc.buf;
         /* st_h->interop_u.cuc.buf; */
     struct iovec iov[1] = {{ buffer, st_h->interop_u.cuc.sz }};
-    unsigned char ctl_buf[1024];
+    unsigned char cmsg_buf[1024];
 
     struct msghdr msg = {
         .msg_name       = &addr,
         .msg_namelen    = addr_len,
         .msg_iov        = iov,
         .msg_iovlen     = 1,
-        .msg_control    = ctl_buf,
+        .msg_control    = cmsg_buf,
         .msg_controllen = 1024,
     };
 
-    ssize_t bytes_received = recvfrom(sockfd, buffer, 1924, 0, (struct sockaddr *)&addr, &addr_len);
+    ssize_t bytes_received = recvmsg(sockfd, &msg, 0);
+
+    /* ssize_t bytes_received = recvfrom(sockfd, buffer, 1924, 0, (struct sockaddr *)&addr, &addr_len); */
     if (bytes_received < 0) {
         LSQ_WARN("connect-udp: error receiving packet: %s", strerror(errno));
         return;
@@ -1259,8 +1276,8 @@ void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
     /* st_h->interop_u.cuc.sz = bytes_received; */
     fprintf(stderr, "Received from target:\n%s\n", buffer);
     
-    /* struct sock_extended_err *eerr; */
-    /* cmsg = CMSG_FIRSTHDR(&msg); */
+    struct sock_extended_err *eerr;
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
     /* eerr = (struct sock_extended_err *)CMSG_DATA(cmsg); */
 
     /* if (eerr && (eerr->ee_errno == ECONNREFUSED || eerr->ee_errno == EHOSTUNREACH)) { */
@@ -1271,15 +1288,27 @@ void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
     /*     } */
     /*     return; */
     /* } */
-    /* /1* ip_header = (struct ip *)st_h->interop_u.cuc.buf; *1/ */
-    /* icmp_header = (struct icmp *)(st_h->interop_u.cuc.buf + (ip_header->ip_hl << 2)); // Skip IP header */
-    /* // Check if it's a "Destination Unreachable" message */
-    /* if (icmp_header->icmp_type == ICMP_DEST_UNREACH && icmp_header->icmp_code == ICMP_HOST_UNREACH) */
-    /*     LSQ_WARN("ICMP Destination Unreachable (Host Unreachable) from %s", inet_ntoa(addr.sin_addr)); */
+    
+    /* struct iphdr ip_header; */
+    /* &ip_header = (struct ip *) buffer; */
+    /* if (ip_header->ip_p == IPPROTO_ICMP) { */
+    /*     struct icmp *icmp_header = (struct icmp *)(buffer + (ip_header->ip_hl << 2)); */
+    /*     if (icmp_header->icmp_type == ICMP_DEST_UNREACH) { */
+    /*         if (icmp_header->icmp_code == ICMP_HOST_UNREACH) { */
+    /*             LSQ_WARN("ICMP Host Unreachable"); */
+    /*             return; */
+    /*         } else if (icmp_header->icmp_code == ICMP_PORT_UNREACH) { */
+    /*             LSQ_WARN("ICMP Port Unreachable"); */
+    /*             return; */
+    /*         } */
+    /*     } */
+
+    /* } */
+    
     
     st_h->interop_u.cuc.resp = (struct resp) { buffer , strlen(buffer), 0, };
     /* lsquic_stream_wantwrite(st_h->stream, 1); */
-    free(buffer);
+    /* event_base_loop(st_h->interop_u.cuc.eb, EVLOOP_ONCE); */
     return;
 }
 
@@ -1472,13 +1501,18 @@ static int parse_connect_udp_request(lsquic_stream_ctx_t *st_h) {
     }
 
     connectudp->eb = event_base_new();
-    connectudp->ev = event_new(st_h->interop_u.cuc.eb, connectudp->sockfd, 
+    /* event_base_loopexit(st_h->server_ctx->prog->prog_eb, 0); */
+    connectudp->ev = event_new(connectudp->eb, connectudp->sockfd, 
             EV_READ|EV_PERSIST, connect_callback, st_h);
+    connectudp->timer = event_new(connectudp->eb, -1, 0, connect_timer_callback, st_h);
     if (connectudp->ev) event_add(connectudp->ev, NULL);
+    struct timeval timeout = { 3, 0 };
+    if (connectudp->timer) event_add(connectudp->timer, &timeout);
     else LSQ_WARN("Couldnot create an event for connect-udp");
     st_h->interop_u.cuc.sz = 1024;
-    st_h->interop_u.cuc.buf = malloc(st_h->interop_u.cuc.sz);
+    st_h->interop_u.cuc.buf = calloc(1, st_h->interop_u.cuc.sz);
 
+    /* event_base_loopcontinue(st_h->server_ctx->prog->prog_eb); */
 
    /* char ip_str[INET_ADDRSTRLEN]; // Buffer to store IP as string */
     /* uint16_t portf = ntohs(target_sa.sin_port); // Convert port to host byte order */
@@ -1493,7 +1527,7 @@ static int parse_connect_udp_request(lsquic_stream_ctx_t *st_h) {
     return 0;
 }
 
-int process_connect_udp_request(lsquic_stream_ctx_t *st_h) {
+int send_udp_request(lsquic_stream_ctx_t *st_h) {
 
     // Send the data to the target
     ssize_t sent_len = sendto(st_h->interop_u.cuc.sockfd, st_h->payload, strlen(st_h->payload), 0, 
@@ -1505,7 +1539,8 @@ int process_connect_udp_request(lsquic_stream_ctx_t *st_h) {
 
     LSQ_INFO("connect-udp: Sent %zd bytes to target host", sent_len);
     /* event_base_loop(st_h->server_ctx->prog->prog_eb, 0); */
-    event_base_loop(st_h->interop_u.cuc.eb, EVLOOP_NONBLOCK);
+    /* sleep(3); */
+    event_base_loop(st_h->interop_u.cuc.eb, EVLOOP_ONCE);
     return 0;
 }
 
@@ -1659,15 +1694,15 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
                     st_h->interop_u.cuc.resp = (struct resp) { "no payload specified\n", strlen("no payload specified\n"), 0, };
                     goto end;
                 }
-                process_connect_udp_request(st_h);
+                send_udp_request(st_h);
                 fprintf(stderr, "sent UDP payload\n");
-                if (st_h->interop_u.cuc.resp.sz <= 0) {
-                    char *defaultresp = "Sent payload, but received nothing\n";
-                    st_h->interop_u.cuc.resp = (struct resp) { defaultresp, strlen(defaultresp), 0, };}
+                if (st_h->interop_u.cuc.flags & CONNTIMEDOUT) {
+                    char *defaultresp = "Sent payload, but received nothing: connection timed out\n";
+                    st_h->interop_u.cuc.resp = (struct resp) { defaultresp, strlen(defaultresp), 0, };
+                }
             end:
                 lsquic_stream_shutdown(stream, 0);
                 lsquic_stream_wantwrite(stream, 1);
-
             }
             break;
         case IOH_MD5SUM:
