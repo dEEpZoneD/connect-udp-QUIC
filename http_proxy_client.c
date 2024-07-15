@@ -691,6 +691,20 @@ http_client_on_write (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
         }
         else
         {
+            ssize_t buffer_size = 1024;
+            char * buffer = (char *)calloc(1, buffer_size);
+            fprintf(stdout, "Type something to send");
+            size_t nread = getline(&buffer, &buffer_size, stdin);
+            if (nread == -1) {
+                perror("getline failed");
+                exit(EXIT_FAILURE);
+            }
+            if (nread > 0) {
+                buffer[nread - 1] = '\0';
+                lsquic_stream_write(stream, buffer, nread);
+                lsquic_stream_flush(stream);
+            }
+            free(buffer);
             lsquic_stream_shutdown(stream, 1);
             lsquic_stream_wantread(stream, 1);
         }

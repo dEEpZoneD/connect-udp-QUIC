@@ -1307,8 +1307,6 @@ void connect_callback(evutil_socket_t sockfd, short events, void *arg) {
     
     
     st_h->interop_u.cuc.resp = (struct resp) { buffer , strlen(buffer), 0, };
-    /* lsquic_stream_wantwrite(st_h->stream, 1); */
-    /* event_base_loop(st_h->interop_u.cuc.eb, EVLOOP_ONCE); */
     return;
 }
 
@@ -1514,17 +1512,7 @@ static int parse_connect_udp_request(lsquic_stream_ctx_t *st_h) {
 
     /* event_base_loopcontinue(st_h->server_ctx->prog->prog_eb); */
 
-   /* char ip_str[INET_ADDRSTRLEN]; // Buffer to store IP as string */
-    /* uint16_t portf = ntohs(target_sa.sin_port); // Convert port to host byte order */
-
-    /* inet_ntop(AF_INET, &(target_sa.sin_addr), ip_str, INET_ADDRSTRLEN); // Convert IP to string */
-
-    /* printf("sockaddr_in Information:\n"); */
-    /* printf("  Family: AF_INET (IPv4)\n"); */
-    /* printf("  Port: %hu\n", portf); */
-    /* printf("  Address: %s\n", ip_str); */
-
-    return 0;
+   return 0;
 }
 
 int send_udp_request(lsquic_stream_ctx_t *st_h) {
@@ -1539,7 +1527,6 @@ int send_udp_request(lsquic_stream_ctx_t *st_h) {
 
     LSQ_INFO("connect-udp: Sent %zd bytes to target host", sent_len);
     /* event_base_loop(st_h->server_ctx->prog->prog_eb, 0); */
-    /* sleep(3); */
     event_base_loop(st_h->interop_u.cuc.eb, EVLOOP_ONCE);
     return 0;
 }
@@ -1678,7 +1665,6 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
         switch (st_h->interop_handler)
         {
         case IOH_CONNECT_UDP:
-            fprintf(stderr, "Handler called\n");
             assert(!st_h->interop_u.cuc.done);
             nw = lsquic_stream_readf(stream, read_connect_udp, st_h);
             if (nw < 0)
@@ -1695,10 +1681,10 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
                     goto end;
                 }
                 send_udp_request(st_h);
-                fprintf(stderr, "sent UDP payload\n");
                 if (st_h->interop_u.cuc.flags & CONNTIMEDOUT) {
                     char *defaultresp = "Sent payload, but received nothing: connection timed out\n";
                     st_h->interop_u.cuc.resp = (struct resp) { defaultresp, strlen(defaultresp), 0, };
+                    /* lsquic_conn_abort(st_h->server_ctx->conn_h->conn); */
                 }
             end:
                 lsquic_stream_shutdown(stream, 0);
@@ -2204,14 +2190,14 @@ interop_server_hset_add_header (void *hset_p, struct lsxpack_header *xhdr)
         return 0;
     }
 
-    // if (9 == name_len && 0 == strncmp(name, ":protocol", 9))
-    // {
-    //     req->protocol = strndup(value, value_len);
-    //     if (!req->protocol)
-    //         return -1;
-    //     req->pseudo_headers |= ph_PROTOCOL;
-    //     return 0;
-    // }
+    if (9 == name_len && 0 == strncmp(name, ":protocol", 9))
+    {
+       req->protocol = strndup(value, value_len);
+       if (!req->protocol)
+            return -1;
+        req->pseudo_headers |= ph_PROTOCOL;
+        return 0;
+    }
 
     return 0;
 }
