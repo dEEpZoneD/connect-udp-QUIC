@@ -1595,7 +1595,6 @@ http_server_interop_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
                     }
                     break;
                 }
-                fprintf(stderr, "Finished parsing\n");
                 st_h->interop_u.cuc.done = 0;
                 break;
             case IOH_VER_HEAD:
@@ -2190,14 +2189,14 @@ interop_server_hset_add_header (void *hset_p, struct lsxpack_header *xhdr)
         return 0;
     }
 
-    if (9 == name_len && 0 == strncmp(name, ":protocol", 9))
-    {
-       req->protocol = strndup(value, value_len);
-       if (!req->protocol)
-            return -1;
-        req->pseudo_headers |= ph_PROTOCOL;
-        return 0;
-    }
+    /* if (9 == name_len && 0 == strncmp(name, ":protocol", 9)) */
+    /* { */
+    /*    req->protocol = strndup(value, value_len); */
+    /*    if (!req->protocol) */
+    /*         return -1; */
+    /*     req->pseudo_headers |= ph_PROTOCOL; */
+    /*     return 0; */
+    /* } */
 
     return 0;
 }

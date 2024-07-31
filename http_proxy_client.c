@@ -1853,6 +1853,20 @@ main (int argc, char **argv)
     {
         fprintf(stderr, "Specify at least one path using -p option\n");
         exit(1);
+        /* TODO 
+         * */
+        if (ient_ctx.method == "CONNECT") {
+            char *curr_path = TAILQ_FIRST(&st_h->client_ctx->hcc_path_elems);
+            if (strstr(path, "/udp/") == NULL) {
+                LSQ_WARN("connect-udp: error: Invalid path");
+                return -1; 
+            }
+
+        path += strlen(prefix);
+
+        char *port_str = strchr(path, (int)delimiter);
+        if (!port_str) return -1;
+
     }
 
     start_time = lsquic_time_now();
